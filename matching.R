@@ -36,6 +36,7 @@ adm <- readOGR(data_folder, 'ne_50m_admin_0_countries_split')
 adm$id <- sequence(nrow(adm))
 d_codes <- over(d, adm[, 'ADM0_A3'])
 d$iso <- d_codes$ADM0_A3
+d$treatment <- 'treatment'
 
 # TODO: Need to make holes in the ADM layer to remove a buffer around each
 # WOCAT observation.
@@ -74,6 +75,7 @@ s <- foreach (poly_id=unique(d$poly_id), .combine=rbind) %do% {
         s <- s[in_pts, ]
     }
     s$iso <- poly$ADM0_A3
+    s$treatment <- 'control'
     return(as.data.frame(s))
 }
 
@@ -84,11 +86,15 @@ s <- foreach (poly_id=unique(d$poly_id), .combine=rbind) %do% {
 # TODO: Filter by date as well
 
 d_land_deg <- filter(d@data, (p01_imprprod == 1) | (p02_redldegr == 1)) %>%
-  select(lpd_te7cl_v2, te_eleva)
+  select(treatment, iso, x=lon, y=lat, lpd_te7cl_v2, te_eleva) %>%
+  bind_rows(s)
 
-match <- geoMatch(treatment ~ te_eleva,
+d_land_deg <- SpatialPointsDataFrame(cbind(d_land_deg$x, d_land_deg$y),
+                                     d_land_deg, proj4string=CRS(proj4string(r)))
+
+match <- geoMatch(treatment ~ iso + te_eleva,
                   method = "nearest", 
                   caliper=0.25, 
-                  data = spatial_lalonde, 
+                  data = d_land_deg, 
                   outcome.variable="re78", 
                   outcome.suffix="_adjusted")
