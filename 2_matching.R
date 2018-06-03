@@ -51,9 +51,6 @@ ggsave(file.path(plot_folder, 'all_data_lpd_by_implementation_year.png'),
        width=5, height=3)
     
 plot_adjacent <- function(m) {
-    m <- filter(m, matched)
-    samp_size <- filter(m, treatment) %>%
-        summarise(n=n())
     p <- group_by(m, treatment) %>%
         mutate(n=n()) %>%
         group_by(lpd, treatment) %>%
@@ -66,7 +63,7 @@ plot_adjacent <- function(m) {
                        width=.5,
                        stat='identity',
                        position=position_dodge(.7)) +
-        geom_text(data=samp_size, aes(x=1, y=Inf, label=paste0('\n    n = ', n)), size=2) +
+        geom_text(aes(x=1, y=Inf, label=paste0('\n    n = ', nrow(filter(m, treatment)))), size=2) +
         xlab('Land productivity') +
         ylab('Frequency') +
         scale_fill_manual(values=c('#ab2727', '#ed7428', '#ffffe0', '#73c374', '#45a146')) +
@@ -104,7 +101,7 @@ match_wocat <- function(d) {
                n_control=sum(!treatment)) %>%
         filter(n_treatment >= 1, n_control >= 1)
     ret <- foreach (this_iso=unique(d$iso), .packages=c('optmatch', 'dplyr'),
-             .combine=rbind) %dopar% {
+             .combine=rbind, .inorder=FALSE) %dopar% {
         this_d <- filter(d, iso == this_iso)
         d_wocat <- filter(this_d, treatment)
         # Filter out climates and land covers that don't appear in the wocat
@@ -137,8 +134,7 @@ match_wocat <- function(d) {
         }
         dists <- caliper(dists, 2)
         m <- fullmatch(dists, min.controls=1, max.controls=1, data=this_d)
-        this_d$matched <- matched(m)
-        return(this_d)
+        return(this_d[matched(m), ])
     }
     return(ret)
 }
@@ -177,13 +173,13 @@ for (slm_group in sequence(25)) {
         filter(complete.cases(.))
     if (sum(d_filt$treatment) < 50) next
     this_m <- match_wocat(d_filt)
-    this_m <- filter(this_m, matched)
-    this_m$group <- 'slm_group'
-    this_m$variable <- var_name
+    this_d <- d_filt[matched(this_m), ]
+    this_d$group <- 'slm_group'
+    this_d$variable <- var_name
     if (n == 1) {
-        m <- this_m
+        m_slmgroup <- this_d
     } else {
-        m <- bind_rows(m_slmgroup, this_m)
+        m_slmgroup <- bind_rows(m_slmgroup, this_d)
     }
     n <- n + 1
 }
