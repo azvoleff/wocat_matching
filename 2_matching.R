@@ -5,7 +5,7 @@ library(optmatch)
 library(doParallel)
 library(RItools)
 library(rgeos)
-library(sp)
+library(rlang)
 registerDoParallel(4)
 
 options("optmatch_max_problem_size"=Inf)
@@ -51,7 +51,8 @@ ggsave(file.path(plot_folder, 'all_data_lpd_by_implementation_year.png'),
        width=5, height=3)
     
 plot_adjacent <- function(m) {
-    n <- filter(m, treatment, matched) %>%
+    m <- filter(m, matched)
+    samp_size <- filter(m, treatment) %>%
         summarise(n=n())
     p <- group_by(m, treatment) %>%
         mutate(n=n()) %>%
@@ -65,10 +66,11 @@ plot_adjacent <- function(m) {
                        width=.5,
                        stat='identity',
                        position=position_dodge(.7)) +
-        geom_text(data=n, aes(x=1, y=Inf, label=paste0('\n    n = ', n)), size=2) +
+        geom_text(data=samp_size, aes(x=1, y=Inf, label=paste0('\n    n = ', n)), size=2) +
         xlab('Land productivity') +
         ylab('Frequency') +
-        scale_fill_manual(values=c('#ab2727', '#ed7428', '#fee9a9', '#ffffe0', '#c4e6c4', '#73c374', '#45a146')) +
+        scale_fill_manual(values=c('#ab2727', '#ed7428', '#ffffe0', '#73c374', '#45a146')) +
+        #scale_fill_manual(values=c('#ab2727', '#ed7428', '#fee9a9', '#ffffe0', '#c4e6c4', '#73c374', '#45a146')) +
         scale_size_manual(element_blank(),
                           values=c(.15, .4),
                           breaks=c(TRUE, FALSE),
@@ -82,6 +84,7 @@ plot_adjacent <- function(m) {
         theme_bw(base_size=8) +
         theme(panel.grid.major.x=element_blank(),
               panel.grid.minor.x=element_blank(),
+              legend.key.size=unit(.13, 'in'),
               axis.ticks.x=element_blank(),
               axis.text.x=element_blank())
     return(p)
@@ -92,12 +95,14 @@ plot_adjacent <- function(m) {
 # TODO: Filter by date as well
 
 match_wocat <- function(d) {
-    # Filter out countries without at least one treatment unit
+    # Filter out countries without at least one treatment unit or without at
+    # least one control unit
     d <- d %>%
         filter(complete.cases(.)) %>%
         group_by(iso) %>%
-        mutate(n_treatment=sum(treatment)) %>%
-        filter(n_treatment >= 1)
+        mutate(n_treatment=sum(treatment),
+               n_control=sum(!treatment)) %>%
+        filter(n_treatment >= 1, n_control >= 1)
     ret <- foreach (this_iso=unique(d$iso), .packages=c('optmatch', 'dplyr'),
              .combine=rbind) %dopar% {
         this_d <- filter(d, iso == this_iso)
@@ -131,7 +136,7 @@ match_wocat <- function(d) {
             dists <- match_on(f, data=this_d)
         }
         dists <- caliper(dists, 2)
-        m <- fullmatch(dists, max.controls=1, data=this_d)
+        m <- fullmatch(dists, min.controls=1, max.controls=1, data=this_d)
         this_d$matched <- matched(m)
         return(this_d)
     }
@@ -146,8 +151,7 @@ d$perf_initial <- as.numeric(d$perf_initial)
 
 # All approaches
 d_filt_all <- select(d, treatment, iso, land_cover, elevation, slope,
-            ppt, climate, access, pop, lpd, perf_initial) %>%
-    filter(complete.cases(.))
+            ppt, climate, access, pop, perf_initial, lpd)
 m_all <- match_wocat(d_filt_all)
 plot_adjacent(m_all)
 ggsave(file.path(plot_folder, 'approaches_all.png'), width=4, height=3)
@@ -172,18 +176,14 @@ for (slm_group in sequence(25)) {
                 ppt, climate, access, pop, perf_initial, lpd) %>%
         filter(complete.cases(.))
     if (sum(d_filt$treatment) < 50) next
-    m <- matchit(treatment ~ iso + land_cover + elevation + slope +
-                             ppt + access + pop + perf_initial,
-                 exact=c('iso'),
-                 data=d_filt,
-                 method = "optimal")
-    m_data <- match.data(m)
-    m_data$group <- 'slm_group'
-    m_data$variable <- var_name
+    this_m <- match_wocat(d_filt)
+    this_m <- filter(this_m, matched)
+    this_m$group <- 'slm_group'
+    this_m$variable <- var_name
     if (n == 1) {
-        m_slmgroup <- m_data
+        m <- this_m
     } else {
-        m_slmgroup <- bind_rows(m_slmgroup, m_data)
+        m <- bind_rows(m_slmgroup, this_m)
     }
     n <- n + 1
 }
