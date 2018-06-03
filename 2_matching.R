@@ -1,196 +1,65 @@
-library(rgdal)
-library(rlang)
-library(rgeos)
-library(raster)
 library(foreach)
-library(gdalUtils)
 library(dplyr)
-library(geoMatch)
 library(ggplot2)
 library(optmatch)
 library(doParallel)
 library(RItools)
+library(rgeos)
+library(sp)
 registerDoParallel(4)
 
 options("optmatch_max_problem_size"=Inf)
-
 
 data_folder <- 'C:/Users/azvol/Code/LandDegradation/WOCAT/matching/Data'
 plot_folder <- 'C:/Users/azvol/Code/LandDegradation/WOCAT/matching/Plots'
 
 ###############################################################################
-# Setup rasters
+# Load point data
 
-# First combine the tiled GEE outputs into a set of 1 band VRTs
-in_files <- list.files(data_folder,
-                       'wocat_covariates_1km-',
-                       full.names=TRUE)
-vrts <- c()
-for (n in 1:8) {
-    vrt <- tempfile(fileext='vrt')
-    gdalbuildvrt(in_files, b=n, vrt, resolution='highest')
-    vrts <- c(vrts, vrt)
-}
-# Now combine any other single band tifs with the mosaiced GEE output
-vrt_file <- tempfile(fileext='vrt')
-gdalbuildvrt(c(vrts, file.path(data_folder, 'lp_perf_globe_1986_2000_avhrr_v2.tif')),
-             vrt_file, resolution='highest', separate=TRUE)
-r <- stack(vrt_file)
-names(r) <- c('lpd_te7cl_v2', 'te_lulc', 'te_eleva', 'te_slop',
-              'te_ppt', 'te_clima', 'te_acces', 'te_pop', 'initial_perf')
+load(file.path(data_folder, 'input_data.RData'))
 
+wocat_rows <- filter(d, treatment)
 
 ###############################################################################
-# Pull control points from rasters
-set.seed(932)
-TOTAL_PTS <- 100000
+# Clean data for matching
 
-# Pull a number of points from each country proportional to the number of WOCAT
-# observations from that country. To do this need a count of WOCAT obs per
-# country ISO code
-d <- read.csv(file.path(data_folder, 'wocat_database_trendsearth_indicators_20180527_clean.csv'))
-d <- SpatialPointsDataFrame(cbind(d$lon, d$lat), d, proj4string=CRS(proj4string(r)))
-
-names(d@data)
-
-d@data <- select(d@data, -lpd_te7cl_v2, -starts_with('te'))
-
-# Pull ISOs for the WOCAT data
-adm <- readOGR(data_folder, 'ne_50m_admin_0_countries_split')
-adm$id <- sequence(nrow(adm))
-d_codes <- over(d, adm[, 'ADM0_A3'])
-d$iso <- d_codes$ADM0_A3
-d$treatment <- TRUE
-
-# TODO: Need to make holes in the ADM layer to remove a buffer around each
-# WOCAT observation.
-
-# Drop countries with very few (say less than 2 or 3?) observations
-d_filtered <- group_by(d@data, iso) %>%
-    mutate(n=n()) %>%
-    filter(n >= 10)
-d <- d[d$X %in% d_filtered$X, ]
-
-# Select potential matching points within the polygon part each WOCAT point
-# comes from.
-d_poly_ids <- over(d, adm[, 'id'])
-d$poly_id <- d_poly_ids$id
-
-# Filter out WOCAT observations that don't fall within a polygon at all
-d <- d[!is.na(d$poly_id), ]
-
-# Add covariates for matching
-e <- extract(r, d, df=TRUE)
-e <- select(e, -ID)
-stopifnot(nrow(d@data) == nrow(e))
-d@data <- cbind(d@data, e)
-d$iso <- droplevels(d$iso)
-
-save(d, file=file.path(data_folder, 'data_treatment.RData'))
-
-s <- foreach (poly_id=unique(d$poly_id), .combine=rbind) %do% {
-    n_obs <- sum(d$poly_id == poly_id, na.rm=TRUE)
-    poly <- adm[adm$id == poly_id, ]
-    r_cropped <- crop(r, poly)
-    # Ensure enough points are drawn to have at least a few within the
-    # country polygon - so draw at least 100.
-    n_pts <- max(c(ceiling(n_obs/nrow(d) * TOTAL_PTS), 100))
-    print(paste0(poly$ADM0_A3, ' (', poly_id, ', ', n_obs, '): ', n_pts))
-    s <- data.frame()
-    while (nrow(s) < 10) {
-        s <- sampleRandom(r_cropped, n_pts, sp=TRUE)
-        in_pts = gWithin(s, poly, byid=TRUE)[1, ]
-        # Handle the case of no points being within the polygon
-        if (sum(in_pts) == 0) {
-          s <- data.frame()
-          next
-        }
-        s <- s[in_pts, ]
-    }
-    s$iso <- poly$ADM0_A3
-    s$treatment <- FALSE
-    return(as.data.frame(s))
-}
-s_filtered <- select(s, treatment, x, y, lpd_te7cl_v2,
-                     iso, te_lulc, te_eleva, te_slop,
-                     te_ppt, te_clima, te_acces, te_pop, initial_perf)
-save(s_filtered, file=file.path(data_folder, 'data_controls.RData'))
-
-###############################################################################
-# Perform matching
-
-# TODO: Filter by date as well
-d_all <-  rename(d@data, x=lon, y=lat) %>%
-    bind_rows(s_filtered) %>%
-    filter(lpd_te7cl_v2 >= 1)
-
-d_all$lpd_te7cl_v2[d_all$lpd_te7cl_v2 == 3] <- 4
-d_all$lpd_te7cl_v2[d_all$lpd_te7cl_v2 == 5] <- 4
+# Combine all stable categories into a single category
+d$lpd[d$lpd == 3] <- 4
+d$lpd[d$lpd == 5] <- 4
                                                            
-d_all$lpd_te7cl_v2 <- ordered(d_all$lpd_te7cl_v2, 
-                              levels=c(1, 2, 4, 6, 7),
-                              labels=c('Declining',
-                                        'Early decline',
-                                        'Stable',
-                                        'Early increase',
-                                        'Increasing'))
-d_all$te_lulc <- factor(d_all$te_lulc)
-d_all$iso <- factor(d_all$iso)
-d_all$initial_perf <- ordered(d_all$initial_perf)
-d_all$te_clima[d_all$te_clima == 1]  <- "c01_WarmTemperateMoist"
-d_all$te_clima[d_all$te_clima == 2]  <- "c02_WarmTemperateDry"
-d_all$te_clima[d_all$te_clima == 3]  <- "c03_CoolTemperateMoist"
-d_all$te_clima[d_all$te_clima == 4]  <- "c04_CoolTemperateDry"
-d_all$te_clima[d_all$te_clima == 5]  <- "c05_PolarMoist"
-d_all$te_clima[d_all$te_clima == 6]  <- "c06_PolarDry"
-d_all$te_clima[d_all$te_clima == 7]  <- "c07_BorealMoist"
-d_all$te_clima[d_all$te_clima == 8]  <- "c08_BorealDry"
-d_all$te_clima[d_all$te_clima == 9]  <- "c09_TropicalMontane"
-d_all$te_clima[d_all$te_clima == 10] <- "c10_TropicalWet"
-d_all$te_clima[d_all$te_clima == 11] <- "c11_TropicalMoist"
-d_all$te_clima[d_all$te_clima == 12] <- "c12_TropicalDry"
-d_all$te_clima <- factor(d_all$te_clima)
+d$lpd <- ordered(d$lpd, 
+                 levels=c(1, 2, 4, 6, 7),
+                 labels=c('Declining',
+                          'Early decline',
+                          'Stable',
+                          'Early increase',
+                          'Increasing'))
 
-d_all$implementation_approximate_fill <- ordered(d_all$implementation_approximate_fill,
-                                                 levels=c("",
-                                                          "3_>50 years",
-                                                          "2_>10 years",
-                                                          "1_<10 years"),
-                                                 labels=c('No date',
-                                                          '> 50 years',
-                                                          '10 - 50 years',
-                                                          '0 - 10 years'))
+table(d$lpd)
 
-save(d_all, file=file.path(data_folder, 'data_all.RData'))
-write.csv(filter(d_all, treatment) %>% select(x, y), file.path(plot_folder, 'treatment_points.csv'))
-
-#load(file=file.path(data_folder, 'data_all.RData'))
-
-table(d_all$lpd_te7cl_v2)
-table(d_all$initial_perf, d_all$treatment)
-table(d_all$treatment)
 
 # Plot color coded with date
-d_all %>%
+d %>%
     filter(treatment) %>%
     ggplot() +
-    geom_histogram(aes(lpd_te7cl_v2, fill=implementation_approximate_fill), stat='count') +
+    geom_histogram(aes(lpd, fill=implementation_approximate_fill), stat='count') +
     xlab('Land productivity') +
     ylab('Frequency') +
     guides(fill=guide_legend('Time since\nimplementation')) +
     theme_bw(base_size=8)
-ggsave(file.path(plot_folder, 'all_data_lpd_by_implementation_year.png'), width=5, height=3)
+ggsave(file.path(plot_folder, 'all_data_lpd_by_implementation_year.png'),
+       width=5, height=3)
     
 plot_adjacent <- function(m) {
     n <- filter(m, treatment) %>%
         summarise(n=n())
     p <- group_by(m, treatment) %>%
         mutate(n=n()) %>%
-        group_by(lpd_te7cl_v2, treatment) %>%
+        group_by(lpd, treatment) %>%
         summarise(frac=n()/n[1]) %>%
         ggplot() +
-        geom_histogram(aes(lpd_te7cl_v2, frac,
-                           fill=lpd_te7cl_v2,
+        geom_histogram(aes(lpd, frac,
+                           fill=lpd,
                            colour=treatment,
                            size=treatment),
                        width=.5,
@@ -220,49 +89,67 @@ plot_adjacent <- function(m) {
 
 # TODO: drop covariates to avoid overfitting?
 
-###############################################################################
-# Approaches
-
-# All approaches
-d_filt_all <- select(d_all, treatment, iso, te_lulc, te_eleva, te_slop,
-            te_ppt, te_clima, te_acces, te_pop, lpd_te7cl_v2, initial_perf) %>%
-    filter(complete.cases(.))
-
-
+# TODO: Filter by date as well
 
 match_wocat <- function(d) {
-    foreach (this_iso=unique(d$iso), .packages=c('optmatch', 'dplyr'),
+    ret <- foreach (this_iso=unique(d$iso), .packages=c('optmatch', 'dplyr'),
              .combine=rbind, .inorder=FALSE) %dopar% {
-        d <- filter(d, iso == this_iso)
-        d$te_clima <- droplevels(d$te_clima)
-        d$te_lulc <- droplevels(d$te_lulc)
-        if ((nlevels(d$te_lulc) == 1) | (nlevels(d$te_clima) == 1)) {
-            # Can't stratify by them if there is only one level for each
-            model <- glm(treatment ~ te_lulc + te_clima +
-                         te_eleva + te_slop + te_ppt + te_acces + te_pop +
-                         initial_perf, data=d)
-        if ((nlevels(d$te_lulc) == 1) | (nlevels(d$te_clima) == 1)) {
-            # Can't stratify by them if there is only one level for each
-            model <- glm(treatment ~ te_lulc + te_clima +
-                         te_eleva + te_slop + te_ppt + te_acces + te_pop +
-                         initial_perf, data=d)
+        this_d <- filter(d, iso == this_iso)
+        d_wocat <- filter(this_d, treatment)
+        # Filter out climates and land covers that don't appear in the wocat
+        # sample, and drop these levels from the factors
+        this_d <- filter(this_d,
+                    climate %in% unique(d_wocat$climate),
+                    land_cover %in% unique(d_wocat$land_cover),
+                    land_cover %in% unique(d_wocat$land_cover))
+        this_d$climate <- droplevels(this_d$climate)
+        this_d$land_cover <- droplevels(this_d$land_cover)
+        f <- treatment ~ elevation + slope + ppt + access + pop + perf_initial
+        # Can't stratify by land cover or climate if they only have one level
+        if (nlevels(this_d$land_cover) >= 2) {
+            f <- update(f, ~ . + strata(land_cover))
         } else {
-            model <- glm(treatment ~ strata(te_lulc, te_clima) +
-                         te_eleva + te_slop + te_ppt + te_acces + te_pop +
-                         initial_perf, data=d)
+            f <- update(f, ~ . - land_cover)
         }
-        dists <- match_on(model, data=d)
+        if (nlevels(this_d$climate) >= 2) {
+            f <- update(f, ~ . + strata(climate))
+        } else {
+            f <- update(f, ~ . - climate)
+        }
+        if (nrow(d_wocat) > 2) {
+            model <- glm(f, data=this_d)
+            dists <- match_on(model, data=this_d)
+        } else {
+            # Use Mahalanobis distance if there aren't enought points to run a
+            # glm
+            dists <- match_on(f, data=this_d)
+        }
         dists <- caliper(dists, 2)
-        m <- pairmatch(dists, data=d)
-        d$m <- m
-        return(d)
+        m <- fullmatch(dists, max.controls=1, data=this_d)
+        this_d$m <- m
+        return(this_d)
     }
-    return(d)
+    return(ret)
 }
 
+###############################################################################
+# Match by approaches
+
+# Match on initial performance as a numeric so the ordering is accounted for
+d$perf_initial <- as.numeric(d$perf_initial)
+
+# Drop Canada because there are not control points there
+table(d$iso == 'CAN', d$treatment)
+d <- filter(d, iso != 'CAN')
+
+# All approaches
+d_filt_all <- select(d, treatment, iso, land_cover, elevation, slope,
+            ppt, climate, access, pop, lpd, perf_initial) %>%
+    filter(complete.cases(.))
 m_all <- match_wocat(d_filt_all)
 
-summary(m_all)
+summary(filter(m_all))
+
 d_filt_all$m_all <- m_all
 plot_adjacent(d_filt_all[matched(m_all), ])
 plot_adjacent(d_filt_all)
@@ -276,12 +163,12 @@ ggsave(file.path(plot_folder, 'approaches_all.png'), width=4, height=3)
 
 
 # Just land deg and improvement
-d_filt_ld_imp <- filter(d_all, (p01_imprprod == 1) | (p02_redldegr == 1) | !treatment) %>%
-    select(treatment, iso, te_lulc, te_eleva, te_slop,
-            te_ppt, te_clima, te_acces, te_pop, initial_perf, lpd_te7cl_v2) %>%
+d_filt_ld_imp <- filter(d, (p01_imprprod == 1) | (p02_redldegr == 1) | !treatment) %>%
+    select(treatment, iso, land_cover, elevation, slope,
+            ppt, climate, access, pop, perf_initial, lpd) %>%
     filter(complete.cases(.))
-m <- matchit(treatment ~ iso + te_lulc + te_eleva + te_slop +
-                         te_ppt + te_clima + te_acces + te_pop + initial_perf,
+m <- matchit(treatment ~ iso + land_cover + elevation + slope +
+                         ppt + climate + access + pop + perf_initial,
              exact=c('iso'),
              data=d_filt_ld_imp,
              method = "optimal")
@@ -291,18 +178,18 @@ plot_adjacent(m_ld_imp)
 ggsave(file.path(plot_folder, 'approaches_ld_and_prod.png'), width=4, height=3)
 
 ###############################################################################
-# By slm_group
+# Run matches by slm_group
 
 n <- 1
 for (slm_group in sequence(25)) {
-    var_name <- names(d_all)[grepl(sprintf('s%02d', slm_group), names(d_all))]
-    d_filt <- filter(d_all, (!!sym(var_name) == 1) | !treatment) %>%
-        select(treatment, iso, te_lulc, te_eleva, te_slop,
-                te_ppt, te_clima, te_acces, te_pop, initial_perf, lpd_te7cl_v2) %>%
+    var_name <- names(d)[grepl(sprintf('s%02d', slm_group), names(d))]
+    d_filt <- filter(d, (!!sym(var_name) == 1) | !treatment) %>%
+        select(treatment, iso, land_cover, elevation, slope,
+                ppt, climate, access, pop, perf_initial, lpd) %>%
         filter(complete.cases(.))
     if (sum(d_filt$treatment) < 50) next
-    m <- matchit(treatment ~ iso + te_lulc + te_eleva + te_slop +
-                             te_ppt + te_acces + te_pop + initial_perf,
+    m <- matchit(treatment ~ iso + land_cover + elevation + slope +
+                             ppt + access + pop + perf_initial,
                  exact=c('iso'),
                  data=d_filt,
                  method = "optimal")
@@ -322,14 +209,14 @@ for (slm_group in sequence(25)) {
 
 n <- 1
 for (man_measure in sequence(4)) {
-    var_name <- names(d_all)[grepl(sprintf('m%02d', man_measure), names(d_all))]
-    d_filt <- filter(d_all, (!!sym(var_name) == 1) | !treatment) %>%
-        select(treatment, iso, te_lulc, te_eleva, te_slop,
-                te_ppt, te_clima, te_acces, te_pop, initial_perf, lpd_te7cl_v2) %>%
+    var_name <- names(d)[grepl(sprintf('m%02d', man_measure), names(d))]
+    d_filt <- filter(d, (!!sym(var_name) == 1) | !treatment) %>%
+        select(treatment, iso, land_cover, elevation, slope,
+                ppt, climate, access, pop, perf_initial, lpd) %>%
         filter(complete.cases(.))
     if (sum(d_filt$treatment) < 50) next
-    m <- matchit(treatment ~ iso + te_lulc + te_eleva + te_slop +
-                             te_ppt + te_acces + te_pop + initial_perf,
+    m <- matchit(treatment ~ iso + land_cover + elevation + slope +
+                             ppt + access + pop + perf_initial,
                  exact=c('iso'),
                  data=d_filt,
                  method = "optimal")
@@ -349,14 +236,14 @@ for (man_measure in sequence(4)) {
 
 n <- 1
 for (deg_objective in sequence(6)) {
-    var_name <- names(d_all)[grepl(sprintf('d%02d', deg_objective), names(d_all))]
-    d_filt <- filter(d_all, (!!sym(var_name) == 1) | !treatment) %>%
-        select(treatment, iso, te_lulc, te_eleva, te_slop,
-               te_ppt, te_clima, te_acces, te_pop, initial_perf, lpd_te7cl_v2) %>%
+    var_name <- names(d)[grepl(sprintf('d%02d', deg_objective), names(d))]
+    d_filt <- filter(d, (!!sym(var_name) == 1) | !treatment) %>%
+        select(treatment, iso, land_cover, elevation, slope,
+               ppt, climate, access, pop, perf_initial, lpd) %>%
         filter(complete.cases(.))
     if (sum(d_filt$treatment) < 50) next
-    m <- matchit(treatment ~ iso + te_lulc + te_eleva + te_slop +
-                     te_ppt + te_acces + te_pop + initial_perf,
+    m <- matchit(treatment ~ iso + land_cover + elevation + slope +
+                     ppt + access + pop + perf_initial,
                  exact=c('iso'),
                  data=d_filt,
                  method = "optimal")
@@ -376,14 +263,14 @@ for (deg_objective in sequence(6)) {
 
 n <- 1
 for (deg_objective in sequence(4)) {
-    var_name <- names(d_all)[grepl(sprintf('r%02d', deg_objective), names(d_all))]
-    d_filt <- filter(d_all, (!!sym(var_name) == 1) | !treatment) %>%
-        select(treatment, iso, te_lulc, te_eleva, te_slop,
-               te_ppt, te_clima, te_acces, te_pop, initial_perf, lpd_te7cl_v2) %>%
+    var_name <- names(d)[grepl(sprintf('r%02d', deg_objective), names(d))]
+    d_filt <- filter(d, (!!sym(var_name) == 1) | !treatment) %>%
+        select(treatment, iso, land_cover, elevation, slope,
+               ppt, climate, access, pop, perf_initial, lpd) %>%
         filter(complete.cases(.))
     if (sum(d_filt$treatment) < 50) next
-    m <- matchit(treatment ~ iso + te_lulc + te_eleva + te_slop +
-                     te_ppt + te_acces + te_pop + initial_perf,
+    m <- matchit(treatment ~ iso + land_cover + elevation + slope +
+                     ppt + access + pop + perf_initial,
                  exact=c('iso'),
                  data=d_filt,
                  method = "optimal")
@@ -406,11 +293,11 @@ plot_combined <- function(m) {
         summarise(n=n())
     p <- group_by(m, variable, treatment) %>%
         mutate(n=n()) %>%
-        group_by(variable, lpd_te7cl_v2, treatment) %>%
+        group_by(variable, lpd, treatment) %>%
         summarise(frac=n()/n[1]) %>%
         ggplot() +
-        geom_histogram(aes(lpd_te7cl_v2, frac,
-                           fill=lpd_te7cl_v2,
+        geom_histogram(aes(lpd, frac,
+                           fill=lpd,
                            colour=treatment,
                            size=treatment),
                        width=.5,
@@ -513,13 +400,13 @@ ggsave(file.path(plot_folder, 'prevention.png'), width=6, height=3)
 #                                      d_land_deg,
 #                                      proj4string=CRS('+init=epsg:4326'))
 # 
-#match <- geoMatch(treatment ~ iso + te_eleva + te_slope + te_clima +
-#                  te_acces + te_rainf + te_lulc + te_pop
+#match <- geoMatch(treatment ~ iso + elevation + slopee + climate +
+#                  access + te_rainf + land_cover + pop
 # 
 # 
-# match <- geoMatch(treatment ~ iso + te_eleva,
+# match <- geoMatch(treatment ~ iso + elevation,
 #                   method = "nearest", 
 #                   caliper=0.25, 
 #                   data = d_land_deg_sp, 
-#                   outcome.variable="lpd_te7cl_v2", 
+#                   outcome.variable="lpd", 
 #                   outcome.suffix="_adjusted")
