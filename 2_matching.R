@@ -51,7 +51,7 @@ ggsave(file.path(plot_folder, 'all_data_lpd_by_implementation_year.png'),
        width=5, height=3)
     
 plot_adjacent <- function(m) {
-    n <- filter(m, treatment) %>%
+    n <- filter(m, treatment, matched) %>%
         summarise(n=n())
     p <- group_by(m, treatment) %>%
         mutate(n=n()) %>%
@@ -92,8 +92,14 @@ plot_adjacent <- function(m) {
 # TODO: Filter by date as well
 
 match_wocat <- function(d) {
+    # Filter out countries without at least one treatment unit
+    d <- d %>%
+        filter(complete.cases(.)) %>%
+        group_by(iso) %>%
+        mutate(n_treatment=sum(treatment)) %>%
+        filter(n_treatment >= 1)
     ret <- foreach (this_iso=unique(d$iso), .packages=c('optmatch', 'dplyr'),
-             .combine=rbind, .inorder=FALSE) %dopar% {
+             .combine=rbind) %dopar% {
         this_d <- filter(d, iso == this_iso)
         d_wocat <- filter(this_d, treatment)
         # Filter out climates and land covers that don't appear in the wocat
@@ -126,7 +132,7 @@ match_wocat <- function(d) {
         }
         dists <- caliper(dists, 2)
         m <- fullmatch(dists, max.controls=1, data=this_d)
-        this_d$m <- m
+        this_d$matched <- matched(m)
         return(this_d)
     }
     return(ret)
@@ -138,42 +144,20 @@ match_wocat <- function(d) {
 # Match on initial performance as a numeric so the ordering is accounted for
 d$perf_initial <- as.numeric(d$perf_initial)
 
-# Drop Canada because there are not control points there
-table(d$iso == 'CAN', d$treatment)
-d <- filter(d, iso != 'CAN')
-
 # All approaches
 d_filt_all <- select(d, treatment, iso, land_cover, elevation, slope,
             ppt, climate, access, pop, lpd, perf_initial) %>%
     filter(complete.cases(.))
 m_all <- match_wocat(d_filt_all)
-
-summary(filter(m_all))
-
-d_filt_all$m_all <- m_all
-plot_adjacent(d_filt_all[matched(m_all), ])
-plot_adjacent(d_filt_all)
-
-summary(m_all)
-
-m_all <- match.data(m)
-
-m_all$group <- 'all'
+plot_adjacent(m_all)
 ggsave(file.path(plot_folder, 'approaches_all.png'), width=4, height=3)
 
 
 # Just land deg and improvement
 d_filt_ld_imp <- filter(d, (p01_imprprod == 1) | (p02_redldegr == 1) | !treatment) %>%
     select(treatment, iso, land_cover, elevation, slope,
-            ppt, climate, access, pop, perf_initial, lpd) %>%
-    filter(complete.cases(.))
-m <- matchit(treatment ~ iso + land_cover + elevation + slope +
-                         ppt + climate + access + pop + perf_initial,
-             exact=c('iso'),
-             data=d_filt_ld_imp,
-             method = "optimal")
-m_ld_imp <- match.data(m)
-m_ld_imp$group <- 'ld_imp'
+            ppt, climate, access, pop, perf_initial, lpd)
+m_ld_imp <- match_wocat(d_filt_ld_imp)
 plot_adjacent(m_ld_imp)
 ggsave(file.path(plot_folder, 'approaches_ld_and_prod.png'), width=4, height=3)
 
