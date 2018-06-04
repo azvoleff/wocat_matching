@@ -1,3 +1,4 @@
+library(MASS)
 library(foreach)
 library(dplyr)
 library(ggplot2)
@@ -17,6 +18,9 @@ plot_folder <- 'C:/Users/azvol/Code/LandDegradation/WOCAT/matching/Plots'
 # Load point data
 
 load(file.path(data_folder, 'input_data.RData'))
+
+# Match on initial performance as a numeric so the ordering is accounted for
+d$perf_initial <- as.numeric(d$perf_initial)
 
 wocat_rows <- filter(d, treatment)
 
@@ -63,7 +67,9 @@ plot_adjacent <- function(m) {
                        width=.5,
                        stat='identity',
                        position=position_dodge(.7)) +
-        geom_text(aes(x=1, y=Inf, label=paste0('\n    n = ', nrow(filter(m, treatment)))), size=2) +
+        geom_text(aes(x=1, y=Inf,
+                      label=paste0('\n    n = ',
+                                   nrow(filter(m, treatment)))), size=2) +
         xlab('Land productivity') +
         ylab('Frequency') +
         scale_fill_manual(values=c('#ab2727', '#ed7428', '#ffffe0', '#73c374', '#45a146')) +
@@ -78,6 +84,7 @@ plot_adjacent <- function(m) {
                             labels=c('WOCAT', 'Control')) +
         guides(fill=guide_legend('Land productivity'),
                color=guide_legend(override.aes=list(fill=NA))) +
+        ylim(c(0, .4)) +
         theme_bw(base_size=8) +
         theme(panel.grid.major.x=element_blank(),
               panel.grid.minor.x=element_blank(),
@@ -87,9 +94,19 @@ plot_adjacent <- function(m) {
     return(p)
 }
 
-# TODO: drop covariates to avoid overfitting?
-
-# TODO: Filter by date as well
+# Function to allow rbinding dataframes with foreach even when some dataframes 
+# may not have any rows
+foreach_rbind <- function(d1, d2) {
+    if (is.null(d1) & is.null(d2)) {
+        return(NULL)
+    } else if (!is.null(d1) & is.null(d2)) {
+        return(d1)
+    } else if (is.null(d1) & !is.null(d2)) {
+        return(d2)
+    } else  {
+        return(rbind(d1, d2))
+    }
+}
 
 match_wocat <- function(d) {
     # Filter out countries without at least one treatment unit or without at
@@ -100,16 +117,19 @@ match_wocat <- function(d) {
         mutate(n_treatment=sum(treatment),
                n_control=sum(!treatment)) %>%
         filter(n_treatment >= 1, n_control >= 1)
-    ret <- foreach (this_iso=unique(d$iso), .packages=c('optmatch', 'dplyr'),
-             .combine=rbind, .inorder=FALSE) %dopar% {
+
+    # Note custom combine to handle iterations that don't return any value
+    ret <- foreach (this_iso=unique(d$iso),
+                    .packages=c('optmatch', 'dplyr'),
+                    .combine=foreach_rbind, .inorder=FALSE) %dopar% {
         this_d <- filter(d, iso == this_iso)
         d_wocat <- filter(this_d, treatment)
         # Filter out climates and land covers that don't appear in the wocat
         # sample, and drop these levels from the factors
         this_d <- filter(this_d,
-                    climate %in% unique(d_wocat$climate),
-                    land_cover %in% unique(d_wocat$land_cover),
-                    land_cover %in% unique(d_wocat$land_cover))
+            climate %in% unique(d_wocat$climate),
+            land_cover %in% unique(d_wocat$land_cover),
+            land_cover %in% unique(d_wocat$land_cover))
         this_d$climate <- droplevels(this_d$climate)
         this_d$land_cover <- droplevels(this_d$land_cover)
         f <- treatment ~ elevation + slope + ppt + access + pop + perf_initial
@@ -133,17 +153,30 @@ match_wocat <- function(d) {
             dists <- match_on(f, data=this_d)
         }
         dists <- caliper(dists, 2)
-        m <- fullmatch(dists, min.controls=1, max.controls=1, data=this_d)
-        return(this_d[matched(m), ])
+        # If the controls are too far from the treatments (due to the caliper) 
+        # then the matching may fail. Can test for this by seeing if subdim 
+        # runs successfully
+        subdim_works <- tryCatch(is.data.frame(subdim(dists)),
+                                 error=function(e) return(FALSE))
+        if (subdim_works) {
+            m <- fullmatch(dists, min.controls=1, max.controls=1, data=this_d)
+            this_d <- this_d[matched(m), ]
+        } else {
+            this_d <- data.frame()
+        }
+        # Need to handle the possibility that there were no matches for this 
+        # treatment, meadning this_d will be an empty data.frame
+        if (nrow(this_d) == 0) {
+            return(NULL)
+        } else {
+            return(this_d)
+        }
     }
     return(ret)
 }
 
 ###############################################################################
 # Match by approaches
-
-# Match on initial performance as a numeric so the ordering is accounted for
-d$perf_initial <- as.numeric(d$perf_initial)
 
 # All approaches
 d_filt_all <- select(d, treatment, iso, land_cover, elevation, slope,
@@ -161,109 +194,50 @@ m_ld_imp <- match_wocat(d_filt_ld_imp)
 plot_adjacent(m_ld_imp)
 ggsave(file.path(plot_folder, 'approaches_ld_and_prod.png'), width=4, height=3)
 
-###############################################################################
-# Run matches by slm_group
+# Just land deg and improvement
+d_filt_ld_imp_last10 <- d%>%
+    filter((p01_imprprod == 1) | (p02_redldegr == 1) | !treatment) %>%
+    filter((implementation_approximate_fill == '0 - 10 years') | !treatment) %>%
+    select(treatment, iso, land_cover, elevation, slope,
+            ppt, climate, access, pop, perf_initial, lpd)
+m_ld_imp_last10 <- match_wocat(d_filt_ld_imp_last10)
+plot_adjacent(m_ld_imp_last10)
+ggsave(file.path(plot_folder, 'approaches_ld_and_prod_last10.png'), width=4, height=3)
 
-n <- 1
-for (slm_group in sequence(25)) {
-    var_name <- names(d)[grepl(sprintf('s%02d', slm_group), names(d))]
-    d_filt <- filter(d, (!!sym(var_name) == 1) | !treatment) %>%
-        select(treatment, iso, land_cover, elevation, slope,
-                ppt, climate, access, pop, perf_initial, lpd) %>%
-        filter(complete.cases(.))
-    if (sum(d_filt$treatment) < 50) next
-    this_m <- match_wocat(d_filt)
-    this_d <- d_filt[matched(this_m), ]
-    this_d$group <- 'slm_group'
-    this_d$variable <- var_name
-    if (n == 1) {
-        m_slmgroup <- this_d
-    } else {
-        m_slmgroup <- bind_rows(m_slmgroup, this_d)
+###############################################################################
+# Run matches by group
+
+match_by_group <- function(pattern, group_name) {
+    var_indices <- which(grepl(pattern, names(d)))
+    ret <- foreach (i=var_indices, .combine=foreach_rbind,
+                    .inorder=FALSE) %do% {
+        var_name <- names(d)[i]
+        d_filt <- filter(d, (!!sym(var_name) == 1) | !treatment) %>%
+            select(treatment, iso, land_cover, elevation, slope,
+                    ppt, climate, access, pop, perf_initial, lpd)
+        if (sum(d_filt$treatment) < 50) {
+            return(NULL)
+        } else {
+            this_m <- match_wocat(d_filt)
+            this_m$group <- group_name
+            this_m$variable <- var_name
+            return(this_m)
+        }
     }
-    n <- n + 1
+    return(ret)
 }
 
-###############################################################################
+# By slm_group
+m_slmgroup <- match_by_group('s[0-9]{1,2}', 'slm_group')
+
 # By management measure
+m_mgtmeasure <- match_by_group('m[0-9]{1,2}', 'man_measure')
 
-n <- 1
-for (man_measure in sequence(4)) {
-    var_name <- names(d)[grepl(sprintf('m%02d', man_measure), names(d))]
-    d_filt <- filter(d, (!!sym(var_name) == 1) | !treatment) %>%
-        select(treatment, iso, land_cover, elevation, slope,
-                ppt, climate, access, pop, perf_initial, lpd) %>%
-        filter(complete.cases(.))
-    if (sum(d_filt$treatment) < 50) next
-    m <- matchit(treatment ~ iso + land_cover + elevation + slope +
-                             ppt + access + pop + perf_initial,
-                 exact=c('iso'),
-                 data=d_filt,
-                 method = "optimal")
-    m_data <- match.data(m)
-    m_data$group <- 'man_measure'
-    m_data$variable <- var_name
-    if (n == 1) {
-        m_manmeasure <- m_data
-    } else {
-        m_manmeasure <- bind_rows(m_manmeasure, m_data)
-    }
-    n <- n + 1
-}
-
-###############################################################################
 # By objective
+m_degobjective <- match_by_group('d[0-9]{1,2}', 'deg_objective')
 
-n <- 1
-for (deg_objective in sequence(6)) {
-    var_name <- names(d)[grepl(sprintf('d%02d', deg_objective), names(d))]
-    d_filt <- filter(d, (!!sym(var_name) == 1) | !treatment) %>%
-        select(treatment, iso, land_cover, elevation, slope,
-               ppt, climate, access, pop, perf_initial, lpd) %>%
-        filter(complete.cases(.))
-    if (sum(d_filt$treatment) < 50) next
-    m <- matchit(treatment ~ iso + land_cover + elevation + slope +
-                     ppt + access + pop + perf_initial,
-                 exact=c('iso'),
-                 data=d_filt,
-                 method = "optimal")
-    m_data <- match.data(m)
-    m_data$group <- 'deg_objective'
-    m_data$variable <- var_name
-    if (n == 1) {
-        m_degobjective <- m_data
-    } else {
-        m_degobjective <- bind_rows(m_degobjective, m_data)
-    }
-    n <- n + 1
-}
-
-###############################################################################
 # By whether tech is preventing, reducing avoiding, restoring
-
-n <- 1
-for (deg_objective in sequence(4)) {
-    var_name <- names(d)[grepl(sprintf('r%02d', deg_objective), names(d))]
-    d_filt <- filter(d, (!!sym(var_name) == 1) | !treatment) %>%
-        select(treatment, iso, land_cover, elevation, slope,
-               ppt, climate, access, pop, perf_initial, lpd) %>%
-        filter(complete.cases(.))
-    if (sum(d_filt$treatment) < 50) next
-    m <- matchit(treatment ~ iso + land_cover + elevation + slope +
-                     ppt + access + pop + perf_initial,
-                 exact=c('iso'),
-                 data=d_filt,
-                 method = "optimal")
-    m_data <- match.data(m)
-    m_data$group <- 'prevention'
-    m_data$variable <- var_name
-    if (n == 1) {
-        m_prevention <- m_data
-    } else {
-        m_prevention <- bind_rows(m_prevention, m_data)
-    }
-    n <- n + 1
-}
+m_prevention <- match_by_group('r[0-9]{1,2}', 'deg_objective')
 
 ###############################################################################
 # Make combined plots for paper
@@ -287,7 +261,8 @@ plot_combined <- function(m) {
         geom_text(data=n, aes(x=1, y=Inf, label=paste0('\n    n = ', n)), size=2) +
         xlab('Land productivity') +
         ylab('Frequency') +
-        scale_fill_manual(values=c('#ab2727', '#ed7428', '#fee9a9', '#ffffe0', '#c4e6c4', '#73c374', '#45a146')) +
+        scale_fill_manual(values=c('#ab2727', '#ed7428', '#ffffe0', '#73c374', 
+                                   '#45a146')) +
         scale_size_manual(element_blank(),
                           values=c(.15, .4),
                           breaks=c(TRUE, FALSE),
@@ -298,6 +273,7 @@ plot_combined <- function(m) {
                             labels=c('WOCAT', 'Control')) +
         guides(fill=guide_legend('Land productivity'),
                color=guide_legend(override.aes=list(fill=NA))) +
+        ylim(c(0, .5)) +
         theme_bw(base_size=8) +
         theme(panel.grid.major.x=element_blank(),
               panel.grid.minor.x=element_blank(),
@@ -306,8 +282,34 @@ plot_combined <- function(m) {
     return(p)
 }
 
-m_manmeasure_relabeled <- m_manmeasure
-m_manmeasure_relabeled$variable <- ordered(m_manmeasure$variable,
+m_slmgroup_relabeled <- filter(m_slmgroup,
+                               variable %in% c('s03_agrofore',
+                                               's07_grazingm',
+                                               's09_impcover',
+                                               's10_minsoild',
+                                               's11_soilfert',
+                                               's12_slopeman',
+                                               's15_waterhar'))
+m_slmgroup_relabeled$variable <- ordered(m_slmgroup_relabeled$variable,
+                                  levels=c('s03_agrofore',
+                                           's07_grazingm',
+                                           's09_impcover',
+                                           's10_minsoild',
+                                           's11_soilfert',
+                                           's12_slopeman',
+                                           's15_waterhar'),
+                                  labels=c('Agroforestry',
+                                           'Grazing management',
+                                           'Improved cover',
+                                           'Minimal soil disturbance',
+                                           'Soil fertility management',
+                                           'Slope management',
+                                           'Water harvesting'))
+plot_combined(m_slmgroup_relabeled)
+ggsave(file.path(plot_folder, 'slmgroup.png'), width=6.5, height=6.5)
+
+m_mgtmeasure_relabeled <- m_mgtmeasure
+m_mgtmeasure_relabeled$variable <- ordered(m_mgtmeasure$variable,
                                   levels=c('m01_agronomm',
                                            'm02_vegetatm',
                                            'm03_structum',
@@ -316,35 +318,8 @@ m_manmeasure_relabeled$variable <- ordered(m_manmeasure$variable,
                                            'Vegetative',
                                            'Structural',
                                            'Management'))
-plot_combined(m_manmeasure_relabeled)
-ggsave(file.path(plot_folder, 'manmeasures.png'), width=4.5, height=4)
-
-m_slmgroup_relabeled <- m_slmgroup
-m_slmgroup_relabeled$variable <- ordered(m_slmgroup$variable,
-                                  levels=c('s03_agrofore',
-                                           's07_grazingm',
-                                           's09_impcover',
-                                           's10_minsoild',
-                                           's11_soilfert',
-                                           's12_slopeman',
-                                           's15_waterhar',
-                                           's16_irrmanag',
-                                           's17_drainage',
-                                           's18_swateman',
-                                           's19_gwateman'),
-                                  labels=c('Agroforestry',
-                                           'Grazing Management',
-                                           'Improved cover',
-                                           'Minimal soil disturbance',
-                                           'Soil fertility management',
-                                           'Cross-slope measures',
-                                           'Water harvesting',
-                                           'Irrigation management',
-                                           'Drainage',
-                                           'Surface water management',
-                                           'Groundwater management'))
-plot_combined(m_slmgroup_relabeled)
-ggsave(file.path(plot_folder, 'slmgroup.png'), width=6.5, height=6.5)
+plot_combined(m_mgtmeasure_relabeled)
+ggsave(file.path(plot_folder, 'mgtmeasures.png'), width=4.5, height=4)
 
 m_degobjective_relabeled <- m_degobjective
 m_degobjective_relabeled$variable <- ordered(m_degobjective$variable,
@@ -372,21 +347,4 @@ m_prevention_relabeled$variable <- ordered(m_prevention$variable,
 plot_combined(m_prevention_relabeled)
 ggsave(file.path(plot_folder, 'prevention.png'), width=6, height=3)
 
-###############################
-# BELOW IS NOT USED
-                 
-# TODO: Temporarily reverse coords until geoMatch is fixed:
-# d_land_deg_sp <- SpatialPointsDataFrame(cbind(d_land_deg$y, d_land_deg$x),
-#                                      d_land_deg,
-#                                      proj4string=CRS('+init=epsg:4326'))
-# 
-#match <- geoMatch(treatment ~ iso + elevation + slopee + climate +
-#                  access + te_rainf + land_cover + pop
-# 
-# 
-# match <- geoMatch(treatment ~ iso + elevation,
-#                   method = "nearest", 
-#                   caliper=0.25, 
-#                   data = d_land_deg_sp, 
-#                   outcome.variable="lpd", 
-#                   outcome.suffix="_adjusted")
+dim(m_prevention_relabeled)
