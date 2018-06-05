@@ -245,11 +245,11 @@ plot_combined <- function(m) {
     n <- group_by(m, variable) %>%
         filter(treatment) %>%
         summarise(n=n())
-    p <- group_by(m, variable, treatment) %>%
+    d <- group_by(m, variable, treatment) %>%
         mutate(n=n()) %>%
         group_by(variable, lpd, treatment) %>%
-        summarise(frac=n()/n[1]) %>%
-        ggplot() +
+        summarise(frac=n()/n[1])
+    p <- ggplot(d) +
         geom_histogram(aes(lpd, frac,
                            fill=lpd,
                            colour=treatment,
@@ -258,7 +258,10 @@ plot_combined <- function(m) {
                        stat='identity',
                        position=position_dodge(.7)) +
         facet_wrap(~ variable) +
-        geom_text(data=n, aes(x=1, y=Inf, label=paste0('\n    n = ', n)), size=2) +
+        geom_text(aes(x=1.2, y=.5,
+                      label=paste0('n = ',
+                                   nrow(filter(m, treatment)))), size=2, hjust=0) +
+        geom_text(aes(x=1.2, y=.4, label=get_odds(d)), size=2, hjust=0) +
         xlab('Land productivity') +
         ylab('Frequency') +
         scale_fill_manual(values=c('#ab2727', '#ed7428', '#ffffe0', '#73c374', 
@@ -280,6 +283,13 @@ plot_combined <- function(m) {
               axis.ticks.x=element_blank(),
               axis.text.x=element_blank())
     return(p)
+}
+
+get_odds <- function(m) {
+    r <- polr(lpd ~ treatment, data=m)
+    lims <- round(exp(confint(r)), 2)
+    return(sprintf('Odds: %.2f (%.2f, %2.2f)',
+                   round(exp(coef(r)), 2),lims[1], lims[2]))
 }
 
 m_slmgroup_relabeled <- filter(m_slmgroup,
@@ -348,3 +358,4 @@ plot_combined(m_prevention_relabeled)
 ggsave(file.path(plot_folder, 'prevention.png'), width=6, height=3)
 
 dim(m_prevention_relabeled)
+

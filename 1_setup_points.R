@@ -8,16 +8,18 @@ registerDoParallel(4)
 data_folder <- 'C:/Users/azvol/Code/LandDegradation/WOCAT/matching/Data'
 
 # Read and combine point data files
-d_control <- read.csv(file.path(data_folder, 'control_lpd_covariates_20180601.csv'))
-d_wocat <- read.csv(file.path(data_folder, 'wocat_lpd_covariates_20180601.csv'))
+d_control <- read.csv(file.path(data_folder, 'control_lpd_covariates_20180604.csv'))
+d_wocat <- read.csv(file.path(data_folder, 'wocat_lpd_covariates_20180604.csv'))
 
 d <- bind_rows(d_control, d_wocat) %>%
     rename(iso = ISO,
            perf_initial = per,
-           access = acc,
+           access = acc_log,
            land_cover = lco,
-           slope = slo,
-           elevation = dem,
+           slope = slo_log,
+           elevation = dem_log,
+           pop = pop_log,
+           ppt = ppt_log,
            climate = cli) %>%
     filter(lpd >= 1,
            perf_initial %in% c(-1, 0, 1))
