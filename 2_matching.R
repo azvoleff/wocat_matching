@@ -7,6 +7,8 @@ library(doParallel)
 library(RItools)
 library(rgeos)
 library(rlang)
+library(sp)
+library(rgdal)
 registerDoParallel(4)
 
 options("optmatch_max_problem_size"=Inf)
@@ -237,6 +239,14 @@ plot_combined <- function(m) {
 
 ###############################################################################
 # Match by approaches
+
+d_wocat_all <- filter(d, treatment)
+d_wocat_all_sp <- SpatialPointsDataFrame(select(d_wocat_all, lon, lat),
+                                         d_wocat_all,
+                                         proj4string=CRS('+init=epsg:4326'),)
+d_wocat_all_sp$lpd <- as.character(d_wocat_all_sp$lpd)
+d_wocat_all_sp$implementation_approximate_fill <- as.character(d_wocat_all_sp$implementation_approximate_fill)
+writeOGR(d_wocat_all_sp, data_folder, 'wocat_points', 'ESRI Shapefile')
 
 # All approaches
 d_filt_all <- select(d, treatment, iso, land_cover, elevation, slope,
