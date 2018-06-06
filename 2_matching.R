@@ -54,11 +54,19 @@ d %>%
 ggsave(file.path(plot_folder, 'all_data_lpd_by_implementation_year.png'),
        width=5, height=3)
     
+get_odds <- function(m) {
+    r <- polr(lpd ~ treatment, data=m, Hess=TRUE)
+    bounds <- round(exp(confint(r)), 2)
+    return(sprintf('odds = %.2f (%.2f, %2.2f)',
+                   round(exp(coef(r)), 2), bounds[1], bounds[2]))
+}
+
 plot_adjacent <- function(m) {
     p <- group_by(m, treatment) %>%
         mutate(n=n()) %>%
         group_by(lpd, treatment) %>%
         summarise(frac=n()/n[1]) %>%
+        ungroup() %>%
         ggplot() +
         geom_histogram(aes(lpd, frac,
                            fill=lpd,
@@ -67,15 +75,18 @@ plot_adjacent <- function(m) {
                        width=.5,
                        stat='identity',
                        position=position_dodge(.7)) +
-        geom_text(aes(x=1, y=Inf,
-                      label=paste0('\n    n = ',
-                                   nrow(filter(m, treatment)))), size=2) +
+        geom_text(aes(x=.85, y=.5,
+                      label=paste0('n = ',
+                                   nrow(filter(m, treatment)))),
+                  size=2, hjust=0) +
+        geom_text(aes(x=.85, y=.45, label=get_odds(m)),
+                      size=2, hjust=0)+
         xlab('Land productivity') +
         ylab('Frequency') +
         scale_fill_manual(values=c('#ab2727', '#ed7428', '#ffffe0', '#73c374', '#45a146')) +
         #scale_fill_manual(values=c('#ab2727', '#ed7428', '#fee9a9', '#ffffe0', '#c4e6c4', '#73c374', '#45a146')) +
         scale_size_manual(element_blank(),
-                          values=c(.15, .4),
+                          values=c(.15, .5),
                           breaks=c(TRUE, FALSE),
                           labels=c('WOCAT', 'Control')) +
         scale_colour_manual(element_blank(),
@@ -84,7 +95,7 @@ plot_adjacent <- function(m) {
                             labels=c('WOCAT', 'Control')) +
         guides(fill=guide_legend('Land productivity'),
                color=guide_legend(override.aes=list(fill=NA))) +
-        ylim(c(0, .4)) +
+        ylim(c(0, .5)) +
         theme_bw(base_size=8) +
         theme(panel.grid.major.x=element_blank(),
               panel.grid.minor.x=element_blank(),
@@ -175,79 +186,20 @@ match_wocat <- function(d) {
     return(ret)
 }
 
-###############################################################################
-# Match by approaches
-
-# All approaches
-d_filt_all <- select(d, treatment, iso, land_cover, elevation, slope,
-            ppt, climate, access, pop, perf_initial, lpd)
-m_all <- match_wocat(d_filt_all)
-plot_adjacent(m_all)
-ggsave(file.path(plot_folder, 'approaches_all.png'), width=4, height=3)
-
-
-# Just land deg and improvement
-d_filt_ld_imp <- filter(d, (p01_imprprod == 1) | (p02_redldegr == 1) | !treatment) %>%
-    select(treatment, iso, land_cover, elevation, slope,
-            ppt, climate, access, pop, perf_initial, lpd)
-m_ld_imp <- match_wocat(d_filt_ld_imp)
-plot_adjacent(m_ld_imp)
-ggsave(file.path(plot_folder, 'approaches_ld_and_prod.png'), width=4, height=3)
-
-# Just land deg and improvement
-d_filt_ld_imp_last10 <- d%>%
-    filter((p01_imprprod == 1) | (p02_redldegr == 1) | !treatment) %>%
-    filter((implementation_approximate_fill == '0 - 10 years') | !treatment) %>%
-    select(treatment, iso, land_cover, elevation, slope,
-            ppt, climate, access, pop, perf_initial, lpd)
-m_ld_imp_last10 <- match_wocat(d_filt_ld_imp_last10)
-plot_adjacent(m_ld_imp_last10)
-ggsave(file.path(plot_folder, 'approaches_ld_and_prod_last10.png'), width=4, height=3)
-
-###############################################################################
-# Run matches by group
-
-match_by_group <- function(pattern, group_name) {
-    var_indices <- which(grepl(pattern, names(d)))
-    ret <- foreach (i=var_indices, .combine=foreach_rbind,
-                    .inorder=FALSE) %do% {
-        var_name <- names(d)[i]
-        d_filt <- filter(d, (!!sym(var_name) == 1) | !treatment) %>%
-            select(treatment, iso, land_cover, elevation, slope,
-                    ppt, climate, access, pop, perf_initial, lpd)
-        if (sum(d_filt$treatment) < 50) {
-            return(NULL)
-        } else {
-            this_m <- match_wocat(d_filt)
-            this_m$group <- group_name
-            this_m$variable <- var_name
-            return(this_m)
-        }
-    }
-    return(ret)
-}
-
-# By slm_group
-m_slmgroup <- match_by_group('s[0-9]{1,2}', 'slm_group')
-
-# By management measure
-m_mgtmeasure <- match_by_group('m[0-9]{1,2}', 'man_measure')
-
-# By objective
-m_degobjective <- match_by_group('d[0-9]{1,2}', 'deg_objective')
-
-# By whether tech is preventing, reducing avoiding, restoring
-m_prevention <- match_by_group('r[0-9]{1,2}', 'deg_objective')
-
-###############################################################################
-# Make combined plots for paper
 plot_combined <- function(m) {
-    n <- group_by(m, variable) %>%
-        filter(treatment) %>%
-        summarise(n=n())
-    d <- group_by(m, variable, treatment) %>%
+    # Note the below is a loop as dplyr wasn't working for some reason...
+    m <- ungroup(m)
+    texts <- foreach(this_grouping=unique(m$grouping),
+                     .combine=rbind) %do% {
+        filter(m, grouping == this_grouping) %>%
+            summarise(grouping=this_grouping,
+                      n=sum(treatment),
+                      odds=get_odds(.))
+    }
+    texts$grouping <- factor(texts$grouping, labels=levels(m$grouping))
+    d <- group_by(m, grouping, treatment) %>%
         mutate(n=n()) %>%
-        group_by(variable, lpd, treatment) %>%
+        group_by(grouping, lpd, treatment) %>%
         summarise(frac=n()/n[1])
     p <- ggplot(d) +
         geom_histogram(aes(lpd, frac,
@@ -257,17 +209,15 @@ plot_combined <- function(m) {
                        width=.5,
                        stat='identity',
                        position=position_dodge(.7)) +
-        facet_wrap(~ variable) +
-        geom_text(aes(x=1.2, y=.5,
-                      label=paste0('n = ',
-                                   nrow(filter(m, treatment)))), size=2, hjust=0) +
-        geom_text(aes(x=1.2, y=.4, label=get_odds(d)), size=2, hjust=0) +
+        facet_wrap(~ grouping) +
+        geom_text(data=texts, aes(x=.85, y=.5, label=paste0('n = ', n, '; ', odds)),
+                  size=2, hjust=0) +
         xlab('Land productivity') +
         ylab('Frequency') +
         scale_fill_manual(values=c('#ab2727', '#ed7428', '#ffffe0', '#73c374', 
                                    '#45a146')) +
         scale_size_manual(element_blank(),
-                          values=c(.15, .4),
+                          values=c(.15, .5),
                           breaks=c(TRUE, FALSE),
                           labels=c('WOCAT', 'Control')) +
         scale_colour_manual(element_blank(),
@@ -285,22 +235,99 @@ plot_combined <- function(m) {
     return(p)
 }
 
-get_odds <- function(m) {
-    r <- polr(lpd ~ treatment, data=m)
-    lims <- round(exp(confint(r)), 2)
-    return(sprintf('Odds: %.2f (%.2f, %2.2f)',
-                   round(exp(coef(r)), 2),lims[1], lims[2]))
+###############################################################################
+# Match by approaches
+
+# All approaches
+d_filt_all <- select(d, treatment, iso, land_cover, elevation, slope,
+            ppt, climate, access, pop, perf_initial, lpd)
+m_all <- match_wocat(d_filt_all)
+
+# Just land deg and improvement
+d_filt_ld_imp <- filter(d, (p01_imprprod == 1) | (p02_redldegr == 1) | !treatment) %>%
+    select(treatment, iso, land_cover, elevation, slope,
+            ppt, climate, access, pop, perf_initial, lpd)
+m_ld_imp <- match_wocat(d_filt_ld_imp)
+
+# Just land deg and improvement
+d_filt_ld_imp_last10 <- d%>%
+    filter((p01_imprprod == 1) | (p02_redldegr == 1) | !treatment) %>%
+    filter((implementation_approximate_fill == '0 - 10 years') | !treatment) %>%
+    select(treatment, iso, land_cover, elevation, slope,
+            ppt, climate, access, pop, perf_initial, lpd)
+m_ld_imp_last10 <- match_wocat(d_filt_ld_imp_last10)
+
+m_all$grouping <- 'All approaches'
+m_ld_imp$grouping <- 'Approaches addressing\nland degradation or productivity'
+m_ld_imp_last10$grouping <- 'Approaches addressing\nland degradation or productivity\n(last 10 years only)'
+m_main_plot <-bind_rows(m_all, m_ld_imp, m_ld_imp_last10)
+m_main_plot$grouping <- factor(m_main_plot$grouping)
+plot_combined(m_main_plot)
+ggsave(file.path(plot_folder, 'approaches_all_combined.png'), width=6.5, height=3)
+
+write.csv(select(m_main_plot, -n_treatment, -n_control),
+                 file=file.path(data_folder, 'approaches_all_combined.csv'),
+                 row.names=FALSE)
+
+ggsave(file.path(plot_folder, 'approaches_all.png'), width=4, height=3)
+ggsave(file.path(plot_folder, 'approaches_ld_and_prod.png'), width=4, height=3)
+ggsave(file.path(plot_folder, 'approaches_ld_and_prod_last10.png'), width=4, height=3)
+
+###############################################################################
+# Run matches by group
+
+match_by_group <- function(d, pattern, group_name) {
+    var_indices <- which(grepl(pattern, names(d)))
+    ret <- foreach (i=var_indices, .combine=foreach_rbind,
+                    .inorder=FALSE) %do% {
+        var_name <- names(d)[i]
+        d_filt <- filter(d, (!!sym(var_name) == 1) | !treatment) %>%
+            select(treatment, iso, land_cover, elevation, slope,
+                    ppt, climate, access, pop, perf_initial, lpd)
+        if (sum(d_filt$treatment) < 50) {
+            return(NULL)
+        } else {
+            this_m <- match_wocat(d_filt)
+            this_m$group <- group_name
+            this_m$grouping <- var_name
+            return(this_m)
+        }
+    }
+    return(ret)
 }
 
+# By slm_group
+m_slmgroup <- match_by_group(d, 's[0-9]{1,2}', 'slm_group')
+# By management measure
+m_mgtmeasure <- match_by_group(d, 'm[0-9]{1,2}', 'man_measure')
+# By objective
+m_degobjective <- match_by_group(d, 'd[0-9]{1,2}', 'deg_objective')
+# By whether tech is preventing, reducing avoiding, restoring
+m_prevention <- match_by_group(d, 'r[0-9]{1,2}', 'deg_objective')
+
+#### Now only last 10 years
+d_last10 <- filter(d, (implementation_approximate_fill == '0 - 10 years') | !treatment)
+# By slm_group
+m_slmgroup_last10 <- match_by_group(d_last10, 's[0-9]{1,2}', 'slm_group')
+# By management measure
+m_mgtmeasure_last10 <- match_by_group(d_last10, 'm[0-9]{1,2}', 'man_measure')
+# By objective
+m_degobjective_last10 <- match_by_group(d_last10, 'd[0-9]{1,2}', 'deg_objective')
+# By whether tech is preventing, reducing avoiding, restoring
+m_prevention_last10 <- match_by_group(d_last10, 'r[0-9]{1,2}', 'deg_objective')
+
+###############################################################################
+# Make combined plots for paper
+
 m_slmgroup_relabeled <- filter(m_slmgroup,
-                               variable %in% c('s03_agrofore',
+                               grouping %in% c('s03_agrofore',
                                                's07_grazingm',
                                                's09_impcover',
                                                's10_minsoild',
                                                's11_soilfert',
                                                's12_slopeman',
                                                's15_waterhar'))
-m_slmgroup_relabeled$variable <- ordered(m_slmgroup_relabeled$variable,
+m_slmgroup_relabeled$grouping <- ordered(m_slmgroup_relabeled$grouping,
                                   levels=c('s03_agrofore',
                                            's07_grazingm',
                                            's09_impcover',
@@ -319,7 +346,7 @@ plot_combined(m_slmgroup_relabeled)
 ggsave(file.path(plot_folder, 'slmgroup.png'), width=6.5, height=6.5)
 
 m_mgtmeasure_relabeled <- m_mgtmeasure
-m_mgtmeasure_relabeled$variable <- ordered(m_mgtmeasure$variable,
+m_mgtmeasure_relabeled$grouping <- ordered(m_mgtmeasure$grouping,
                                   levels=c('m01_agronomm',
                                            'm02_vegetatm',
                                            'm03_structum',
@@ -332,7 +359,7 @@ plot_combined(m_mgtmeasure_relabeled)
 ggsave(file.path(plot_folder, 'mgtmeasures.png'), width=4.5, height=4)
 
 m_degobjective_relabeled <- m_degobjective
-m_degobjective_relabeled$variable <- ordered(m_degobjective$variable,
+m_degobjective_relabeled$grouping <- ordered(m_degobjective$grouping,
                                   levels=c('d01_winderos',
                                            'd02_waterero',
                                            'd03_chemical',
@@ -349,7 +376,7 @@ plot_combined(m_degobjective_relabeled)
 ggsave(file.path(plot_folder, 'degobjectives.png'), width=6, height=4)
 
 m_prevention_relabeled <- m_prevention
-m_prevention_relabeled$variable <- ordered(m_prevention$variable,
+m_prevention_relabeled$grouping <- ordered(m_prevention$grouping,
                                   levels=c('r01_preventl',
                                            'r02_reduceld',
                                            'r03_restorel'),
@@ -357,5 +384,73 @@ m_prevention_relabeled$variable <- ordered(m_prevention$variable,
 plot_combined(m_prevention_relabeled)
 ggsave(file.path(plot_folder, 'prevention.png'), width=6, height=3)
 
-dim(m_prevention_relabeled)
+
+###
+### Last 10
+###
+m_slmgroup_relabeled_last10 <- filter(m_slmgroup_last10,
+                               grouping %in% c('s03_agrofore',
+                                               's07_grazingm',
+                                               's09_impcover',
+                                               's10_minsoild',
+                                               's11_soilfert',
+                                               's12_slopeman',
+                                               's15_waterhar'))
+m_slmgroup_relabeled_last10$grouping <- ordered(m_slmgroup_relabeled_last10$grouping,
+                                  levels=c('s03_agrofore',
+                                           's07_grazingm',
+                                           's09_impcover',
+                                           's10_minsoild',
+                                           's11_soilfert',
+                                           's12_slopeman',
+                                           's15_waterhar'),
+                                  labels=c('Agroforestry',
+                                           'Grazing management',
+                                           'Improved cover',
+                                           'Minimal soil disturbance',
+                                           'Soil fertility management',
+                                           'Slope management',
+                                           'Water harvesting'))
+plot_combined(m_slmgroup_relabeled_last10)
+ggsave(file.path(plot_folder, 'slmgroup_last10.png'), width=6.5, height=6.5)
+
+m_mgtmeasure_relabeled_last10 <- m_mgtmeasure_last10
+m_mgtmeasure_relabeled_last10$grouping <- ordered(m_mgtmeasure$grouping,
+                                  levels=c('m01_agronomm',
+                                           'm02_vegetatm',
+                                           'm03_structum',
+                                           'm04_managemm'),
+                                  labels=c('Agronomic',
+                                           'Vegetative',
+                                           'Structural',
+                                           'Management'))
+plot_combined(m_mgtmeasure_relabeled_last10)
+ggsave(file.path(plot_folder, 'mgtmeasures_last10.png'), width=4.5, height=4)
+
+m_degobjective_relabeled_last10 <- m_degobjective_last10
+m_degobjective_relabeled_last10$grouping <- ordered(m_degobjective$grouping,
+                                  levels=c('d01_winderos',
+                                           'd02_waterero',
+                                           'd03_chemical',
+                                           'd04_physical',
+                                           'd05_biologic',
+                                           'd06_waterdeg'),
+                                  labels=c('Wind erosion',
+                                           'Water erosion',
+                                           'Chemical deterioration',
+                                           'Physical deterioration',
+                                           'Biological degradation',
+                                           'Water degradation'))
+plot_combined(m_degobjective_relabeled_last10)
+ggsave(file.path(plot_folder, 'degobjectives_last10.png'), width=6, height=4)
+
+m_prevention_relabeled_last10 <- m_prevention_last10
+m_prevention_relabeled_last10$grouping <- ordered(m_prevention$grouping,
+                                  levels=c('r01_preventl',
+                                           'r02_reduceld',
+                                           'r03_restorel'),
+                                  labels=c('Prevent', 'Reduce', 'Restore'))
+plot_combined(m_prevention_relabeled_last10)
+ggsave(file.path(plot_folder, 'prevention_last10.png'), width=6, height=3)
+
 
