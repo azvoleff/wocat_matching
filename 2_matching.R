@@ -9,6 +9,7 @@ library(rgeos)
 library(rlang)
 library(sp)
 library(rgdal)
+library(tidyr)
 registerDoParallel(4)
 
 options("optmatch_max_problem_size"=Inf)
@@ -243,10 +244,11 @@ plot_combined <- function(m) {
 d_wocat_all <- filter(d, treatment)
 d_wocat_all_sp <- SpatialPointsDataFrame(select(d_wocat_all, lon, lat),
                                          d_wocat_all,
-                                         proj4string=CRS('+init=epsg:4326'),)
+                                         proj4string=CRS('+init=epsg:4326'))
 d_wocat_all_sp$lpd <- as.character(d_wocat_all_sp$lpd)
 d_wocat_all_sp$implementation_approximate_fill <- as.character(d_wocat_all_sp$implementation_approximate_fill)
-writeOGR(d_wocat_all_sp, data_folder, 'wocat_points', 'ESRI Shapefile')
+writeOGR(d_wocat_all_sp, data_folder, 'wocat_points', 'ESRI Shapefile',
+         overwrite=TRUE)
 
 # All approaches
 d_filt_all <- select(d, treatment, iso, land_cover, elevation, slope,
@@ -283,6 +285,53 @@ ggsave(file.path(plot_folder, 'approaches_all.png'), width=4, height=3)
 ggsave(file.path(plot_folder, 'approaches_ld_and_prod.png'), width=4, height=3)
 ggsave(file.path(plot_folder, 'approaches_ld_and_prod_last10.png'), width=4, height=3)
 
+# Calculate summary stats on all data
+m_all_long <- m_all %>%
+    ungroup() %>%
+    select(treatment, iso, land_cover, elevation, slope, 
+           ppt, climate, access, pop, perf_initial, lpd) %>%
+    gather(key='variable', value='value', -treatment)
+m_all_long$variable <- factor(m_all_long$variable,
+                              levels=c('access',
+                                       'climate',
+                                       'elevation',
+                                       'iso',
+                                       'land_cover',
+                                       'lpd',
+                                       'perf_initial',
+                                       'pop',
+                                       'ppt',
+                                       'slope'),
+                              labels=c('log(Accessibility)',
+                                       'Climate zone',
+                                       'log(Elevation)',
+                                       'Country',
+                                       'Land cover',
+                                       'LPD',
+                                       'Initial performance',
+                                       'log(Population)',
+                                       'log(Precipitation)',
+                                       'log(Slope)'))
+m_all_long$treatment<- ordered(m_all_long$treatment,
+                               levels=c(TRUE, FALSE),
+                               labels=c('WOCAT', 'Control'))
+
+# Plot summary histograms for the variables that are not matched on exactly
+excluded_vars <- c('Country',
+                   'Land cover',
+                   'Initial performance',
+                   'LPD',
+                   'Climate zone')
+filter(m_all_long, !(variable %in% excluded_vars)) %>%
+    mutate(value=as.numeric(value)) %>%
+    ggplot() +
+    facet_grid(treatment~variable) +
+    geom_histogram(aes(value, ..count../sum(..count..)*5)) +
+    ylab('Frequency') +
+    xlab('Value') +
+    ggsave(file.path(plot_folder, 'summary_histograms_logged_vars.png'),
+           width=6.5, height=4)
+
 ###############################################################################
 # Run matches by group
 
@@ -293,7 +342,7 @@ match_by_group <- function(d, pattern, group_name) {
         var_name <- names(d)[i]
         d_filt <- filter(d, (!!sym(var_name) == 1) | !treatment) %>%
             select(treatment, iso, land_cover, elevation, slope,
-                    ppt, climate, access, pop, perf_initial, lpd)
+                   ppt, climate, access, pop, perf_initial, lpd)
         if (sum(d_filt$treatment) < 50) {
             return(NULL)
         } else {
@@ -313,7 +362,7 @@ m_mgtmeasure <- match_by_group(d, 'm[0-9]{1,2}', 'man_measure')
 # By objective
 m_degobjective <- match_by_group(d, 'd[0-9]{1,2}', 'deg_objective')
 # By whether tech is preventing, reducing avoiding, restoring
-m_prevention <- match_by_group(d, 'r[0-9]{1,2}', 'deg_objective')
+m_prevention <- match_by_group(d, 'r[0-9]{1,2}', 'prevention')
 
 #### Now only last 10 years
 d_last10 <- filter(d, (implementation_approximate_fill == '0 - 10 years') | !treatment)
@@ -324,7 +373,7 @@ m_mgtmeasure_last10 <- match_by_group(d_last10, 'm[0-9]{1,2}', 'man_measure')
 # By objective
 m_degobjective_last10 <- match_by_group(d_last10, 'd[0-9]{1,2}', 'deg_objective')
 # By whether tech is preventing, reducing avoiding, restoring
-m_prevention_last10 <- match_by_group(d_last10, 'r[0-9]{1,2}', 'deg_objective')
+m_prevention_last10 <- match_by_group(d_last10, 'r[0-9]{1,2}', 'prevention')
 
 ###############################################################################
 # Make combined plots for paper
