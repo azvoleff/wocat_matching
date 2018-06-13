@@ -91,14 +91,14 @@ plot_adjacent <- function(m) {
         scale_size_manual(element_blank(),
                           values=c(.15, .5),
                           breaks=c(TRUE, FALSE),
-                          labels=c('WOCAT', 'Control')) +
+                          labels=c('SLM', 'Control')) +
         scale_colour_manual(element_blank(),
                             values=c('grey', 'black'),
                             breaks=c(TRUE, FALSE),
-                            labels=c('WOCAT', 'Control')) +
+                            labels=c('SLM', 'Control')) +
         guides(fill=guide_legend('Land productivity'),
                color=guide_legend(override.aes=list(fill=NA))) +
-        ylim(c(0, .5)) +
+        ylim(c(0, .55)) +
         theme_bw(base_size=8) +
         theme(panel.grid.major.x=element_blank(),
               panel.grid.minor.x=element_blank(),
@@ -222,14 +222,14 @@ plot_combined <- function(m) {
         scale_size_manual(element_blank(),
                           values=c(.15, .5),
                           breaks=c(TRUE, FALSE),
-                          labels=c('WOCAT', 'Control')) +
+                          labels=c('SLM', 'Control')) +
         scale_colour_manual(element_blank(),
                             values=c('grey', 'black'),
                             breaks=c(TRUE, FALSE),
-                            labels=c('WOCAT', 'Control')) +
+                            labels=c('SLM', 'Control')) +
         guides(fill=guide_legend('Land productivity'),
                color=guide_legend(override.aes=list(fill=NA))) +
-        ylim(c(0, .5)) +
+        ylim(c(0, .55)) +
         theme_bw(base_size=8) +
         theme(panel.grid.major.x=element_blank(),
               panel.grid.minor.x=element_blank(),
@@ -314,7 +314,7 @@ m_all_long$variable <- factor(m_all_long$variable,
                                        'log(Slope)'))
 m_all_long$treatment<- ordered(m_all_long$treatment,
                                levels=c(TRUE, FALSE),
-                               labels=c('WOCAT', 'Control'))
+                               labels=c('SLM', 'Control'))
 
 # Plot summary histograms for the variables that are not matched on exactly
 excluded_vars <- c('Country',
