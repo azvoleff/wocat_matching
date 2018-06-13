@@ -281,10 +281,6 @@ write.csv(select(m_main_plot, -n_treatment, -n_control),
                  file=file.path(data_folder, 'approaches_all_combined.csv'),
                  row.names=FALSE)
 
-ggsave(file.path(plot_folder, 'approaches_all.png'), width=4, height=3)
-ggsave(file.path(plot_folder, 'approaches_ld_and_prod.png'), width=4, height=3)
-ggsave(file.path(plot_folder, 'approaches_ld_and_prod_last10.png'), width=4, height=3)
-
 # Calculate summary stats on all data
 m_all_long <- m_all %>%
     ungroup() %>%
@@ -302,16 +298,16 @@ m_all_long$variable <- factor(m_all_long$variable,
                                        'pop',
                                        'ppt',
                                        'slope'),
-                              labels=c('log(Accessibility)',
+                              labels=c('log(Accessibility (min))',
                                        'Climate zone',
-                                       'log(Elevation)',
+                                       'log(Elevation (m))',
                                        'Country',
                                        'Land cover',
                                        'LPD',
                                        'Initial performance',
-                                       'log(Population)',
-                                       'log(Precipitation)',
-                                       'log(Slope)'))
+                                       'log(Population (1000s))',
+                                       'log(Precipitation (mm))',
+                                       'log(Slope (degrees))'))
 m_all_long$treatment<- ordered(m_all_long$treatment,
                                levels=c(TRUE, FALSE),
                                labels=c('SLM', 'Control'))
@@ -329,7 +325,42 @@ filter(m_all_long, !(variable %in% excluded_vars)) %>%
     geom_histogram(aes(value, ..count../sum(..count..)*5)) +
     ylab('Frequency') +
     xlab('Value') +
+    theme_bw(base_size=8) +
     ggsave(file.path(plot_folder, 'summary_histograms_logged_vars.png'),
+           width=6.5, height=4)
+
+scalings <- data.frame(variable=c('Accessibility (min)',
+                                  'Elevation (m)',
+                                  'Population (1000s)',
+                                  'Precipitation (mm)',
+                                  'Slope (degrees)'),
+                       scaling=c(10,
+                                 100,
+                                 1,
+                                 100,
+                                 1),
+                       stringsAsFactors=FALSE)
+
+filter(m_all_long, !(variable %in% excluded_vars)) %>%
+    mutate(value=exp(as.numeric(value)),
+           variable=gsub('\\)$', '', gsub('log\\(', '', as.character(variable))))
+    
+# Plot summary histograms on original scale for the variables that are not
+# matched on exactly
+filter(m_all_long, !(variable %in% excluded_vars)) %>%
+    mutate(value=exp(as.numeric(value)),
+           variable=gsub('\\)$', '', gsub('log\\(', '', as.character(variable)))) %>%
+    group_by(variable) %>%
+    mutate(value=value * scalings$scaling[scalings$variable == variable[1]]) %>%
+    ungroup() %>%
+    ggplot() +
+    facet_grid(treatment~variable, scales='free') +
+    geom_histogram(aes(value, ..count../sum(..count..)*5)) +
+    ylab('Frequency') +
+    xlab('Value') +
+    theme_bw(base_size=8) +
+    theme(axis.text.x=element_text(angle=45, hjust=1)) +
+    ggsave(file.path(plot_folder, 'summary_histograms.png'),
            width=6.5, height=4)
 
 ###############################################################################
