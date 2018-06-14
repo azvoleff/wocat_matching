@@ -341,10 +341,6 @@ scalings <- data.frame(variable=c('Accessibility (min)',
                                  1),
                        stringsAsFactors=FALSE)
 
-filter(m_all_long, !(variable %in% excluded_vars)) %>%
-    mutate(value=exp(as.numeric(value)),
-           variable=gsub('\\)$', '', gsub('log\\(', '', as.character(variable))))
-    
 # Plot summary histograms on original scale for the variables that are not
 # matched on exactly
 filter(m_all_long, !(variable %in% excluded_vars)) %>%
@@ -362,6 +358,24 @@ filter(m_all_long, !(variable %in% excluded_vars)) %>%
     theme(axis.text.x=element_text(angle=45, hjust=1)) +
     ggsave(file.path(plot_folder, 'summary_histograms.png'),
            width=6.5, height=4)
+
+# Make summary table of values after logging
+filter(m_all_long, !(variable %in% excluded_vars)) %>%
+    mutate(value=exp(as.numeric(value)),
+           variable=gsub('\\)$', '', gsub('log\\(', '', as.character(variable)))) %>%
+    group_by(variable) %>%
+    mutate(value=value * scalings$scaling[scalings$variable == variable[1]]) %>%
+    summarise(min(value), max(value), mean(value), median(value), sd(value)) %>%
+    write.csv(file.path(plot_folder, file='summary_stats.csv'),
+              row.names=FALSE)
+
+# Make summary table of values in original_units
+filter(m_all_long, !(variable %in% excluded_vars)) %>%
+    mutate(value=as.numeric(value)) %>%
+    group_by(variable) %>%
+    summarise(min(value), max(value), mean(value), median(value), sd(value)) %>%
+    write.csv(file.path(plot_folder, file='summary_stats_logged.csv'),
+              row.names=FALSE)
 
 ###############################################################################
 # Run matches by group
