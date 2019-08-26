@@ -269,13 +269,13 @@ d_filt_ld_imp_last10 <- d%>%
             ppt, climate, access, pop, perf_initial, lpd)
 m_ld_imp_last10 <- match_wocat(d_filt_ld_imp_last10)
 
-m_all$grouping <- 'All approaches'
-m_ld_imp$grouping <- 'Approaches addressing\nland degradation or productivity'
-m_ld_imp_last10$grouping <- 'Approaches addressing\nland degradation or productivity\n(last 10 years only)'
+m_all$grouping <- 'All SLM technologies'
+m_ld_imp$grouping <- 'SLM technologies addressing\nland degradation or productivity'
+m_ld_imp_last10$grouping <- 'SLM technologies addressing\nland degradation or productivity\n(last 10 years only)'
 m_main_plot <-bind_rows(m_all, m_ld_imp, m_ld_imp_last10)
 m_main_plot$grouping <- factor(m_main_plot$grouping)
 plot_combined(m_main_plot)
-ggsave(file.path(plot_folder, 'approaches_all_combined.png'), width=6.5, height=3)
+ggsave(file.path(plot_folder, 'approaches_all_combined.png'), width=6.5, height=2.4)
 
 write.csv(select(m_main_plot, -n_treatment, -n_control),
                  file=file.path(data_folder, 'approaches_all_combined.csv'),
@@ -327,7 +327,7 @@ filter(m_all_long, !(variable %in% excluded_vars)) %>%
     xlab('Value') +
     theme_bw(base_size=8) +
     ggsave(file.path(plot_folder, 'summary_histograms_logged_vars.png'),
-           width=6.5, height=4)
+           width=6.5, height=3)
 
 scalings <- data.frame(variable=c('Accessibility (min)',
                                   'Elevation (m)',
@@ -357,7 +357,7 @@ filter(m_all_long, !(variable %in% excluded_vars)) %>%
     theme_bw(base_size=8) +
     theme(axis.text.x=element_text(angle=45, hjust=1)) +
     ggsave(file.path(plot_folder, 'summary_histograms.png'),
-           width=6.5, height=4)
+           width=6.5, height=3)
 
 # Make summary table of values after logging
 filter(m_all_long, !(variable %in% excluded_vars)) %>%
@@ -409,16 +409,16 @@ m_degobjective <- match_by_group(d, 'd[0-9]{1,2}', 'deg_objective')
 # By whether tech is preventing, reducing avoiding, restoring
 m_prevention <- match_by_group(d, 'r[0-9]{1,2}', 'prevention')
 
-#### Now only last 10 years
-d_last10 <- filter(d, (implementation_approximate_fill == '0 - 10 years') | !treatment)
-# By slm_group
-m_slmgroup_last10 <- match_by_group(d_last10, 's[0-9]{1,2}', 'slm_group')
-# By management measure
-m_mgtmeasure_last10 <- match_by_group(d_last10, 'm[0-9]{1,2}', 'man_measure')
-# By objective
-m_degobjective_last10 <- match_by_group(d_last10, 'd[0-9]{1,2}', 'deg_objective')
-# By whether tech is preventing, reducing avoiding, restoring
-m_prevention_last10 <- match_by_group(d_last10, 'r[0-9]{1,2}', 'prevention')
+# #### Now only last 10 years
+# d_last10 <- filter(d, (implementation_approximate_fill == '0 - 10 years') | !treatment)
+# # By slm_group
+# m_slmgroup_last10 <- match_by_group(d_last10, 's[0-9]{1,2}', 'slm_group')
+# # By management measure
+# m_mgtmeasure_last10 <- match_by_group(d_last10, 'm[0-9]{1,2}', 'man_measure')
+# # By objective
+# m_degobjective_last10 <- match_by_group(d_last10, 'd[0-9]{1,2}', 'deg_objective')
+# # By whether tech is preventing, reducing avoiding, restoring
+# m_prevention_last10 <- match_by_group(d_last10, 'r[0-9]{1,2}', 'prevention')
 
 ###############################################################################
 # Make combined plots for paper
@@ -429,25 +429,22 @@ m_slmgroup_relabeled <- filter(m_slmgroup,
                                                's09_impcover',
                                                's10_minsoild',
                                                's11_soilfert',
-                                               's12_slopeman',
-                                               's15_waterhar'))
+                                               's12_slopeman'))
 m_slmgroup_relabeled$grouping <- ordered(m_slmgroup_relabeled$grouping,
                                   levels=c('s03_agrofore',
                                            's07_grazingm',
                                            's09_impcover',
                                            's10_minsoild',
                                            's11_soilfert',
-                                           's12_slopeman',
-                                           's15_waterhar'),
+                                           's12_slopeman'),
                                   labels=c('Agroforestry',
                                            'Grazing management',
                                            'Improved cover',
                                            'Minimal soil disturbance',
                                            'Soil fertility management',
-                                           'Slope management',
-                                           'Water harvesting'))
+                                           'Slope management'))
 plot_combined(m_slmgroup_relabeled)
-ggsave(file.path(plot_folder, 'slmgroup.png'), width=6.5, height=6.5)
+ggsave(file.path(plot_folder, 'slmgroup.png'), width=6.5, height=3)
 
 m_mgtmeasure_relabeled <- m_mgtmeasure
 m_mgtmeasure_relabeled$grouping <- ordered(m_mgtmeasure$grouping,
@@ -460,7 +457,7 @@ m_mgtmeasure_relabeled$grouping <- ordered(m_mgtmeasure$grouping,
                                            'Structural',
                                            'Management'))
 plot_combined(m_mgtmeasure_relabeled)
-ggsave(file.path(plot_folder, 'mgtmeasures.png'), width=4.5, height=4)
+ggsave(file.path(plot_folder, 'mgtmeasures.png'), width=4.5, height=3)
 
 m_degobjective_relabeled <- m_degobjective
 m_degobjective_relabeled$grouping <- ordered(m_degobjective$grouping,
@@ -477,7 +474,7 @@ m_degobjective_relabeled$grouping <- ordered(m_degobjective$grouping,
                                            'Biological degradation',
                                            'Water degradation'))
 plot_combined(m_degobjective_relabeled)
-ggsave(file.path(plot_folder, 'degobjectives.png'), width=6, height=4)
+ggsave(file.path(plot_folder, 'degobjectives.png'), width=6.5, height=3)
 
 m_prevention_relabeled <- m_prevention
 m_prevention_relabeled$grouping <- ordered(m_prevention$grouping,
@@ -486,75 +483,76 @@ m_prevention_relabeled$grouping <- ordered(m_prevention$grouping,
                                            'r03_restorel'),
                                   labels=c('Prevent', 'Reduce', 'Restore'))
 plot_combined(m_prevention_relabeled)
-ggsave(file.path(plot_folder, 'prevention.png'), width=6, height=3)
+ggsave(file.path(plot_folder, 'prevention.png'), width=6.5, height=2.25)
 
 
-###
-### Last 10
-###
-m_slmgroup_relabeled_last10 <- filter(m_slmgroup_last10,
-                               grouping %in% c('s03_agrofore',
-                                               's07_grazingm',
-                                               's09_impcover',
-                                               's10_minsoild',
-                                               's11_soilfert',
-                                               's12_slopeman',
-                                               's15_waterhar'))
-m_slmgroup_relabeled_last10$grouping <- ordered(m_slmgroup_relabeled_last10$grouping,
-                                  levels=c('s03_agrofore',
-                                           's07_grazingm',
-                                           's09_impcover',
-                                           's10_minsoild',
-                                           's11_soilfert',
-                                           's12_slopeman',
-                                           's15_waterhar'),
-                                  labels=c('Agroforestry',
-                                           'Grazing management',
-                                           'Improved cover',
-                                           'Minimal soil disturbance',
-                                           'Soil fertility management',
-                                           'Slope management',
-                                           'Water harvesting'))
-plot_combined(m_slmgroup_relabeled_last10)
-ggsave(file.path(plot_folder, 'slmgroup_last10.png'), width=6.5, height=6.5)
+# ###
+# ### Last 10
+# ###
+# m_slmgroup_relabeled_last10 <- filter(m_slmgroup_last10,
+#                                grouping %in% c('s03_agrofore',
+#                                                's07_grazingm',
+#                                                's09_impcover',
+#                                                's10_minsoild',
+#                                                's11_soilfert',
+#                                                's12_slopeman',
+#                                                's15_waterhar'))
+# m_slmgroup_relabeled_last10$grouping <- ordered(m_slmgroup_relabeled_last10$grouping,
+#                                   levels=c('s03_agrofore',
+#                                            's07_grazingm',
+#                                            's09_impcover',
+#                                            's10_minsoild',
+#                                            's11_soilfert',
+#                                            's12_slopeman',
+#                                            's15_waterhar'),
+#                                   labels=c('Agroforestry',
+#                                            'Grazing management',
+#                                            'Improved cover',
+#                                            'Minimal soil disturbance',
+#                                            'Soil fertility management',
+#                                            'Slope management',
+#                                            'Water harvesting'))
+# plot_combined(m_slmgroup_relabeled_last10)
+# ggsave(file.path(plot_folder, 'slmgroup_last10.png'), width=6.5, height=6.5)
+# 
+# m_mgtmeasure_relabeled_last10 <- m_mgtmeasure_last10
+# m_mgtmeasure_relabeled_last10$grouping <- ordered(m_mgtmeasure$grouping,
+#                                   levels=c('m01_agronomm',
+#                                            'm02_vegetatm',
+#                                            'm03_structum',
+#                                            'm04_managemm'),
+#                                   labels=c('Agronomic',
+#                                            'Vegetative',
+#                                            'Structural',
+#                                            'Management'))
+# plot_combined(m_mgtmeasure_relabeled_last10)
+# ggsave(file.path(plot_folder, 'mgtmeasures_last10.png'), width=4.5, height=4)
+# 
+# m_degobjective_relabeled_last10 <- m_degobjective_last10
+# m_degobjective_relabeled_last10$grouping <- ordered(m_degobjective$grouping,
+#                                   levels=c('d01_winderos',
+#                                            'd02_waterero',
+#                                            'd03_chemical',
+#                                            'd04_physical',
+#                                            'd05_biologic',
+#                                            'd06_waterdeg'),
+#                                   labels=c('Wind erosion',
+#                                            'Water erosion',
+#                                            'Chemical deterioration',
+#                                            'Physical deterioration',
+#                                            'Biological degradation',
+#                                            'Water degradation'))
+# plot_combined(m_degobjective_relabeled_last10)
+# ggsave(file.path(plot_folder, 'degobjectives_last10.png'), width=6, height=4)
+# 
+# m_prevention_relabeled_last10 <- m_prevention_last10
+# m_prevention_relabeled_last10$grouping <- ordered(m_prevention$grouping,
+#                                   levels=c('r01_preventl',
+#                                            'r02_reduceld',
+#                                            'r03_restorel'),
+#                                   labels=c('Prevent', 'Reduce', 'Restore'))
+# plot_combined(m_prevention_relabeled_last10)
+# ggsave(file.path(plot_folder, 'prevention_last10.png'), width=6, height=3)
 
-m_mgtmeasure_relabeled_last10 <- m_mgtmeasure_last10
-m_mgtmeasure_relabeled_last10$grouping <- ordered(m_mgtmeasure$grouping,
-                                  levels=c('m01_agronomm',
-                                           'm02_vegetatm',
-                                           'm03_structum',
-                                           'm04_managemm'),
-                                  labels=c('Agronomic',
-                                           'Vegetative',
-                                           'Structural',
-                                           'Management'))
-plot_combined(m_mgtmeasure_relabeled_last10)
-ggsave(file.path(plot_folder, 'mgtmeasures_last10.png'), width=4.5, height=4)
 
-m_degobjective_relabeled_last10 <- m_degobjective_last10
-m_degobjective_relabeled_last10$grouping <- ordered(m_degobjective$grouping,
-                                  levels=c('d01_winderos',
-                                           'd02_waterero',
-                                           'd03_chemical',
-                                           'd04_physical',
-                                           'd05_biologic',
-                                           'd06_waterdeg'),
-                                  labels=c('Wind erosion',
-                                           'Water erosion',
-                                           'Chemical deterioration',
-                                           'Physical deterioration',
-                                           'Biological degradation',
-                                           'Water degradation'))
-plot_combined(m_degobjective_relabeled_last10)
-ggsave(file.path(plot_folder, 'degobjectives_last10.png'), width=6, height=4)
-
-m_prevention_relabeled_last10 <- m_prevention_last10
-m_prevention_relabeled_last10$grouping <- ordered(m_prevention$grouping,
-                                  levels=c('r01_preventl',
-                                           'r02_reduceld',
-                                           'r03_restorel'),
-                                  labels=c('Prevent', 'Reduce', 'Restore'))
-plot_combined(m_prevention_relabeled_last10)
-ggsave(file.path(plot_folder, 'prevention_last10.png'), width=6, height=3)
-
-
+save.image(file='2_matching_output.Rdata')
